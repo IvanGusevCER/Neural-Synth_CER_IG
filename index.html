@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="et">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural-Synth</title>
+    <style>
+        /* Tume teema ja täisekraan / Dark theme and full screen */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #0a0a12;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            cursor: crosshair;
+        }
+
+        /* Hõljuv juhtpaneel / Floating control panel */
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10, 10, 20, 0.8);
+            border: 1px solid #0ff;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            z-index: 10;
+            max-width: 90%;
+        }
+
+        .controls-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        button {
+            background: #111;
+            color: #0ff;
+            border: 1px solid #0ff;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+
+        button:hover, button.active {
+            background: #0ff;
+            color: #000;
+            box-shadow: 0 0 10px #0ff;
+        }
+
+        /* Värvide valik / Color instrument picker */
+        .color-picker {
+            display: flex;
+            gap: 5px;
+        }
+
+        .color-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+        }
+        .color-btn.active { border-color: #fff; box-shadow: 0 0 10px #fff; }
+
+        #btn-red { background-color: #ff0055; box-shadow: 0 0 10px #ff0055; }
+        #btn-blue { background-color: #00e5ff; box-shadow: 0 0 10px #00e5ff; }
+        #btn-yellow { background-color: #ffea00; box-shadow: 0 0 10px #ffea00; }
+
+        .portfolio-link {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: #ff0055;
+            text-decoration: none;
+            font-size: 16px;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ui-panel">
+        <div class="controls-row">
+            <span>Instrument:</span>
+            <div class="color-picker">
+                <div class="color-btn active" id="btn-blue" data-color="#00e5ff" data-type="sine" title="Pehme klaver (Sine)"></div>
+                <div class="color-btn" id="btn-yellow" data-color="#ffea00" data-type="sawtooth" title="Särav süntesaator (Sawtooth)"></div>
+                <div class="color-btn" id="btn-red" data-color="#ff0055" data-type="square" title="Agressiivne bass (Square)"></div>
+            </div>
+        </div>
+        <div class="controls-row">
+            <button id="btn-sym">6. Symmetry: OFF</button>
+            <button id="btn-magnet">5. Place Magnet</button>
+            <button id="btn-record">8. Record (5s)</button>
+            <button id="btn-clear" style="border-color: #ff0055; color: #ff0055;">9. Clear & Shake</button>
+        </div>
+    </div>
+
+    <a href="../index.html" class="portfolio-link">&lt;&lt; Tagasi portfooliosse</a>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+
+        // === AUDIO KONTEKST JA MUUTUJAD / AUDIO CONTEXT ===
+        let audioCtx = null;
+        let masterGain, delayNode, bgmOsc, bgmGain, bgmFilter;
+        let audioInitialized = false;
+
+        // Olekud
+        let isDrawing = false;
+        let lastX = 0, lastY = 0;
+        let lastTime = 0;
+        
+        let currentColor = '#00e5ff';
+        let currentOscType = 'sine'; // sine, sawtooth, square
+        let symmetryMode = false;
+        let magnetMode = false;
+
+        // Looper ja magnetid
+        let isRecording = false;
+        let recordedStrokes = [];
+        let loopStartTime = 0;
+        let magnets = [];
+        let particles = [];
+        let totalInk = 0; // Taustaheli intensiivsuse jaoks
+
+        // === INITSILISEERIMINE / SETUP ===
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function initAudio() {
+            if (audioInitialized) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Master väljund / Master output
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.5; // Väldime ülekoormust
+            masterGain.connect(audioCtx.destination);
+
+            // 3. Echo Trails (Delay Node)
+            delayNode = audioCtx.createDelay(1.0);
+            delayNode.delayTime.value = 0.4;
+            const feedbackNode = audioCtx.createGain();
+            feedbackNode.gain.value = 0.5; // Kaja sumbumine
+            delayNode.connect(feedbackNode);
+            feedbackNode.connect(delayNode);
+            delayNode.connect(masterGain);
+
+            // 10. Background Vibe (Atmosfäär)
+            bgmOsc = audioCtx.createOscillator();
+            bgmOsc.type = 'triangle';
+            bgmOsc.frequency.value = 50; // Sügav droon
+            
+            bgmFilter = audioCtx.createBiquadFilter();
+            bgmFilter.type = 'lowpass';
+            bgmFilter.frequency.value = 100; // Algselt summutatud
+            
+            bgmGain = audioCtx.createGain();
+            bgmGain.gain.value = 0.1;
+
+            bgmOsc.connect(bgmFilter).connect(bgmGain).connect(masterGain);
+            bgmOsc.start();
+
+            audioInitialized = true;
+        }
+
+        // === HELI GENEREERIMINE / SOUND GENERATION ===
+        function playSynth(x, y, speed, colorStr, oscType) {
+            if (!audioCtx) return;
+
+            // 1. Pitch-on-Y (Kõrgus sõltub Y teljest, madalamal = madalam sagedus)
+            const minFreq = 100;
+            const maxFreq = 1500;
+            const pitch = maxFreq - ((y / height) * (maxFreq - minFreq));
+
+            // 4. Speed-Volume (Kiirus määrab helitugevuse ja teravuse)
+            const speedClamp = Math.min(speed, 100) / 100; // 0.0 to 1.0
+            const volume = 0.1 + (speedClamp * 0.3);
+
+            // Loome ühe "noodi" osad
+            const osc = audioCtx.createOscillator();
+            const filter = audioCtx.createBiquadFilter();
+            const gain = audioCtx.createGain();
+
+            osc.type = oscType;
+            osc.frequency.setValueAtTime(pitch, audioCtx.currentTime);
+
+            filter.type = 'lowpass';
+            // Kiirem liigutus = avatum filter = teravam heli
+            filter.frequency.setValueAtTime(500 + (speedClamp * 3000), audioCtx.currentTime);
+
+            gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+            // Heli vaibub lühikese aja jooksul (Release)
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+
+            osc.connect(filter).connect(gain);
+            gain.connect(masterGain); // Otse väljundisse
+            gain.connect(delayNode);  // Ja kaja efekti
+
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.5);
+
+            // Uuenda taustaheli
+            totalInk += 1;
+            bgmFilter.frequency.setTargetAtTime(100 + Math.min(totalInk * 5, 2000), audioCtx.currentTime, 0.5);
+        }
+
+        // === JOONISTAMINE JA VISUAALID / DRAWING AND VISUALS ===
+        function drawPoint(x, y, lx, ly, speed, colorStr) {
+            ctx.beginPath();
+            ctx.moveTo(lx, ly);
+            
+            // 7. Waveform Brush (Joon on siksakiline vastavalt kiirusele)
+            const dx = x - lx;
+            const dy = y - ly;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const angle = Math.atan2(dy, dx);
+            
+            // Loo võnkumine
+            const steps = Math.max(Math.floor(dist / 5), 1);
+            for(let i=1; i<=steps; i++) {
+                const stepT = i / steps;
+                const px = lx + dx * stepT;
+                const py = ly + dy * stepT;
+                // Lainetus joone suhtes risti
+                const wave = Math.sin(stepT * Math.PI * 4 * (speed/20)) * (speed/3); 
+                const wx = px + Math.cos(angle + Math.PI/2) * wave;
+                const wy = py + Math.sin(angle + Math.PI/2) * wave;
+                ctx.lineTo(wx, wy);
+            }
+
+            ctx.strokeStyle = colorStr;
+            ctx.lineWidth = 3 + (speed / 15);
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = colorStr;
+            ctx.stroke();
+        }
+
+        function handleInput(x, y, isClick = false) {
+            initAudio(); // Käivita heli esimesel puutel
+
+            if (magnetMode && isClick) {
+                // 5. Gravity Loops (Lisa magnet)
+                magnets.push({x: x, y: y});
+                // Lisa mõned osakesed selle ümber
+                for(let i=0; i<3; i++) {
+                    particles.push({
+                        angle: Math.random() * Math.PI * 2,
+                        radius: 50 + Math.random() * 100,
+                        speed: 0.02 + Math.random() * 0.05,
+                        magnetIndex: magnets.length - 1,
+                        color: currentColor,
+                        type: currentOscType
+                    });
+                }
+                return;
+            }
+
+            const now = performance.now();
+            const dt = Math.max(now - lastTime, 1);
+            const dx = x - lastX;
+            const dy = y - lastY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const speed = dist / dt * 20;
+
+            if (isRecording && !magnetMode) {
+                recordedStrokes.push({ x, y, lx: lastX, ly: lastY, s: speed, c: currentColor, t: currentOscType, time: now - loopStartTime });
+            }
+
+            // Joonista ja mängi heli
+            drawPoint(x, y, lastX, lastY, speed, currentColor);
+            if(dist > 5) playSynth(x, y, speed, currentColor, currentOscType);
+
+            // 6. Symmetry Mode
+            if (symmetryMode) {
+                // Horisontaalne
+                drawPoint(width-x, y, width-lastX, lastY, speed, currentColor);
+                if(dist > 5) playSynth(width-x, y, speed, currentColor, currentOscType);
+                // Vertikaalne
+                drawPoint(x, height-y, lastX, height-lastY, speed, currentColor);
+                // Diagonaalne
+                drawPoint(width-x, height-y, width-lastX, height-lastY, speed, currentColor);
+            }
+
+            lastX = x; lastY = y; lastTime = now;
+        }
+
+        // Sündmuste kuulajad hiirele ja puutele
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            lastX = e.clientX; lastY = e.clientY; lastTime = performance.now();
+            handleInput(e.clientX, e.clientY, true);
+        });
+        canvas.addEventListener('mousemove', (e) => { if (isDrawing) handleInput(e.clientX, e.clientY); });
+        canvas.addEventListener('mouseup', () => isDrawing = false);
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            isDrawing = true;
+            lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; lastTime = performance.now();
+            handleInput(lastX, lastY, true);
+        }, {passive: false});
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (isDrawing) handleInput(e.touches[0].clientX, e.touches[0].clientY);
+        }, {passive: false});
+        canvas.addEventListener('touchend', () => isDrawing = false);
+
+        // === RENDER LOOP (Kaja, Loop, Magnetid) ===
+        function animate() {
+            // 3. Echo Trails (Pilt tuhmub aeglaselt)
+            ctx.fillStyle = 'rgba(10, 10, 18, 0.05)';
+            ctx.fillRect(0, 0, width, height);
+
+            // 5. Gravity Loops (Osakeste liikumine)
+            particles.forEach(p => {
+                p.angle += p.speed;
+                const m = magnets[p.magnetIndex];
+                if(m) {
+                    const px = m.x + Math.cos(p.angle) * p.radius;
+                    const py = m.y + Math.sin(p.angle) * p.radius;
+                    
+                    ctx.beginPath();
+                    ctx.arc(px, py, 3, 0, Math.PI*2);
+                    ctx.fillStyle = p.color;
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = p.color;
+                    ctx.fill();
+
+                    // Mängi heli iga ringi alguses
+                    if(p.angle >= Math.PI*2) {
+                        p.angle = 0;
+                        playSynth(px, py, 50, p.color, p.type);
+                    }
+                }
+            });
+
+            // Magnetite joonistamine
+            magnets.forEach(m => {
+                ctx.beginPath();
+                ctx.arc(m.x, m.y, 10, 0, Math.PI*2);
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+            });
+
+            requestAnimationFrame(animate);
+        }
+        animate();
+
+        // === NUPUD JA LIIDES ===
+        
+        // Värvide vahetamine (Instrument)
+        document.querySelectorAll('.color-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                currentColor = e.target.dataset.color;
+                currentOscType = e.target.dataset.type;
+            });
+        });
+
+        // 6. Symmetry lüliti
+        const btnSym = document.getElementById('btn-sym');
+        btnSym.addEventListener('click', () => {
+            symmetryMode = !symmetryMode;
+            btnSym.textContent = symmetryMode ? "6. Symmetry: ON" : "6. Symmetry: OFF";
+            btnSym.classList.toggle('active');
+        });
+
+        // 5. Magnet lüliti
+        const btnMagnet = document.getElementById('btn-magnet');
+        btnMagnet.addEventListener('click', () => {
+            magnetMode = !magnetMode;
+            btnMagnet.classList.toggle('active');
+        });
+
+        // 8. Record & Loop
+        const btnRecord = document.getElementById('btn-record');
+        let loopInterval = null;
+        btnRecord.addEventListener('click', () => {
+            if (!isRecording && !loopInterval) {
+                // Alusta salvestust
+                isRecording = true;
+                recordedStrokes = [];
+                loopStartTime = performance.now();
+                btnRecord.textContent = "Recording...";
+                btnRecord.classList.add('active');
+                
+                setTimeout(() => {
+                    isRecording = false;
+                    btnRecord.textContent = "Playing Loop";
+                    btnRecord.style.borderColor = "#0f0";
+                    btnRecord.style.color = "#0f0";
+                    
+                    // Alusta taasesitust (Looper)
+                    loopInterval = setInterval(() => {
+                        recordedStrokes.forEach(stroke => {
+                            setTimeout(() => {
+                                drawPoint(stroke.x, stroke.y, stroke.lx, stroke.ly, stroke.s, stroke.c);
+                                playSynth(stroke.x, stroke.y, stroke.s, stroke.c, stroke.t);
+                            }, stroke.time);
+                        });
+                    }, 5000);
+                }, 5000); // 5 sekundi salvestus
+            } else {
+                // Peata loop
+                clearInterval(loopInterval);
+                loopInterval = null;
+                btnRecord.textContent = "8. Record (5s)";
+                btnRecord.classList.remove('active');
+                btnRecord.style.borderColor = "#0ff";
+                btnRecord.style.color = "#0ff";
+            }
+        });
+
+        // 9. Shake to Clear
+        function triggerClear() {
+            // "Sädemete" efekt (puhastame ekraani välguga)
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, width, height);
+            
+            // Nullime andmed
+            magnets = [];
+            particles = [];
+            totalInk = 0;
+            if (bgmFilter) bgmFilter.frequency.setValueAtTime(100, audioCtx.currentTime);
+        }
+
+        document.getElementById('btn-clear').addEventListener('click', triggerClear);
+
+        // Seadme raputamise tuvastus (nutitelefonidele)
+        window.addEventListener('devicemotion', (event) => {
+            const acc = event.acceleration;
+            if (acc && (Math.abs(acc.x) > 15 || Math.abs(acc.y) > 15 || Math.abs(acc.z) > 15)) {
+                triggerClear();
+            }
+        });
+
+    </script>
+</body>
+</html>
