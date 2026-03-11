@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Neural-Synth</title>
     <style>
-        /* Tume teema ja täisekraan / Dark theme and full screen */
+        /* Базовые стили: темная тема и полноэкранный режим */
         body, html {
             margin: 0;
             padding: 0;
@@ -25,7 +25,7 @@
             cursor: crosshair;
         }
 
-        /* Hõljuv juhtpaneel / Floating control panel */
+        /* Плавающая панель управления */
         .ui-panel {
             position: absolute;
             top: 20px;
@@ -67,7 +67,7 @@
             box-shadow: 0 0 10px #0ff;
         }
 
-        /* Värvide valik / Color instrument picker */
+        /* Выбор цвета/инструмента */
         .color-picker {
             display: flex;
             gap: 5px;
@@ -86,14 +86,27 @@
         #btn-blue { background-color: #00e5ff; box-shadow: 0 0 10px #00e5ff; }
         #btn-yellow { background-color: #ffea00; box-shadow: 0 0 10px #ffea00; }
 
+        /* Стили кнопки портфолио */
         .portfolio-link {
             position: absolute;
             bottom: 20px;
             left: 20px;
-            color: #ff0055;
+            display: block;
+            text-align: center;
+            background: #4a0000;
+            color: #fff;
             text-decoration: none;
-            font-size: 16px;
+            padding: 8px 15px;
+            border-radius: 4px;
+            border: 1px solid #777;
+            font-size: 14px;
+            transition: 0.3s;
             z-index: 10;
+        }
+        .portfolio-link:hover {
+            background: #ff4400;
+            color: #000;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -116,7 +129,9 @@
         </div>
     </div>
 
-    <a href="../index.html" class="portfolio-link">&lt;&lt; Tagasi portfooliosse</a>
+    <a href="https://cerber-portfolio.netlify.app/" target="_blank" class="portfolio-link">
+        Minu Portfoolio
+    </a>
 
     <canvas id="canvas"></canvas>
 
@@ -125,12 +140,12 @@
         const ctx = canvas.getContext('2d');
         let width, height;
 
-        // === AUDIO KONTEKST JA MUUTUJAD / AUDIO CONTEXT ===
+        // === АУДИО КОНТЕКСТ И ПЕРЕМЕННЫЕ ===
         let audioCtx = null;
         let masterGain, delayNode, bgmOsc, bgmGain, bgmFilter;
         let audioInitialized = false;
 
-        // Olekud
+        // Состояния программы
         let isDrawing = false;
         let lastX = 0, lastY = 0;
         let lastTime = 0;
@@ -140,15 +155,15 @@
         let symmetryMode = false;
         let magnetMode = false;
 
-        // Looper ja magnetid
+        // Лупер и магниты
         let isRecording = false;
         let recordedStrokes = [];
         let loopStartTime = 0;
         let magnets = [];
         let particles = [];
-        let totalInk = 0; // Taustaheli intensiivsuse jaoks
+        let totalInk = 0; // Для интенсивности фонового звука
 
-        // === INITSILISEERIMINE / SETUP ===
+        // === ИНИЦИАЛИЗАЦИЯ (Адаптация размера) ===
         function resize() {
             width = canvas.width = window.innerWidth;
             height = canvas.height = window.innerHeight;
@@ -156,32 +171,33 @@
         window.addEventListener('resize', resize);
         resize();
 
+        // Запуск аудио-движка (после первого клика пользователя)
         function initAudio() {
             if (audioInitialized) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             
-            // Master väljund / Master output
+            // Основной выход (Master Output)
             masterGain = audioCtx.createGain();
-            masterGain.gain.value = 0.5; // Väldime ülekoormust
+            masterGain.gain.value = 0.5; 
             masterGain.connect(audioCtx.destination);
 
-            // 3. Echo Trails (Delay Node)
+            // Эффект Эха (Delay Node)
             delayNode = audioCtx.createDelay(1.0);
             delayNode.delayTime.value = 0.4;
             const feedbackNode = audioCtx.createGain();
-            feedbackNode.gain.value = 0.5; // Kaja sumbumine
+            feedbackNode.gain.value = 0.5; // Затухание эха
             delayNode.connect(feedbackNode);
             feedbackNode.connect(delayNode);
             delayNode.connect(masterGain);
 
-            // 10. Background Vibe (Atmosfäär)
+            // Фоновая атмосфера (Background Vibe)
             bgmOsc = audioCtx.createOscillator();
             bgmOsc.type = 'triangle';
-            bgmOsc.frequency.value = 50; // Sügav droon
+            bgmOsc.frequency.value = 50; // Глубокий дрон
             
             bgmFilter = audioCtx.createBiquadFilter();
             bgmFilter.type = 'lowpass';
-            bgmFilter.frequency.value = 100; // Algselt summutatud
+            bgmFilter.frequency.value = 100; // Изначально приглушенный
             
             bgmGain = audioCtx.createGain();
             bgmGain.gain.value = 0.1;
@@ -192,20 +208,20 @@
             audioInitialized = true;
         }
 
-        // === HELI GENEREERIMINE / SOUND GENERATION ===
+        // === ГЕНЕРАЦИЯ ЗВУКА СИНТЕЗАТОРА ===
         function playSynth(x, y, speed, colorStr, oscType) {
             if (!audioCtx) return;
 
-            // 1. Pitch-on-Y (Kõrgus sõltub Y teljest, madalamal = madalam sagedus)
+            // Высота звука зависит от оси Y (чем ниже точка, тем ниже частота)
             const minFreq = 100;
             const maxFreq = 1500;
             const pitch = maxFreq - ((y / height) * (maxFreq - minFreq));
 
-            // 4. Speed-Volume (Kiirus määrab helitugevuse ja teravuse)
-            const speedClamp = Math.min(speed, 100) / 100; // 0.0 to 1.0
+            // Громкость и яркость зависят от скорости движения мыши
+            const speedClamp = Math.min(speed, 100) / 100; // от 0.0 до 1.0
             const volume = 0.1 + (speedClamp * 0.3);
 
-            // Loome ühe "noodi" osad
+            // Создание одного "нотного" узла
             const osc = audioCtx.createOscillator();
             const filter = audioCtx.createBiquadFilter();
             const gain = audioCtx.createGain();
@@ -214,43 +230,43 @@
             osc.frequency.setValueAtTime(pitch, audioCtx.currentTime);
 
             filter.type = 'lowpass';
-            // Kiirem liigutus = avatum filter = teravam heli
+            // Быстрое движение = более открытый фильтр (резкий звук)
             filter.frequency.setValueAtTime(500 + (speedClamp * 3000), audioCtx.currentTime);
 
             gain.gain.setValueAtTime(volume, audioCtx.currentTime);
-            // Heli vaibub lühikese aja jooksul (Release)
+            // Плавное затухание (Release)
             gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
 
             osc.connect(filter).connect(gain);
-            gain.connect(masterGain); // Otse väljundisse
-            gain.connect(delayNode);  // Ja kaja efekti
+            gain.connect(masterGain); // Напрямую
+            gain.connect(delayNode);  // И в эхо-эффект
 
             osc.start();
             osc.stop(audioCtx.currentTime + 0.5);
 
-            // Uuenda taustaheli
+            // Обновление фонового звука (реагирует на количество "чернил")
             totalInk += 1;
             bgmFilter.frequency.setTargetAtTime(100 + Math.min(totalInk * 5, 2000), audioCtx.currentTime, 0.5);
         }
 
-        // === JOONISTAMINE JA VISUAALID / DRAWING AND VISUALS ===
+        // === ВИЗУАЛИЗАЦИЯ РИСОВАНИЯ ===
         function drawPoint(x, y, lx, ly, speed, colorStr) {
             ctx.beginPath();
             ctx.moveTo(lx, ly);
             
-            // 7. Waveform Brush (Joon on siksakiline vastavalt kiirusele)
+            // Волнообразная кисть (линия вибрирует в зависимости от скорости)
             const dx = x - lx;
             const dy = y - ly;
             const dist = Math.sqrt(dx*dx + dy*dy);
             const angle = Math.atan2(dy, dx);
             
-            // Loo võnkumine
+            // Создание колебаний линии
             const steps = Math.max(Math.floor(dist / 5), 1);
             for(let i=1; i<=steps; i++) {
                 const stepT = i / steps;
                 const px = lx + dx * stepT;
                 const py = ly + dy * stepT;
-                // Lainetus joone suhtes risti
+                // Волна перпендикулярна линии
                 const wave = Math.sin(stepT * Math.PI * 4 * (speed/20)) * (speed/3); 
                 const wx = px + Math.cos(angle + Math.PI/2) * wave;
                 const wy = py + Math.sin(angle + Math.PI/2) * wave;
@@ -266,13 +282,14 @@
             ctx.stroke();
         }
 
+        // === ОБРАБОТКА ВВОДА (Мышь и Тач) ===
         function handleInput(x, y, isClick = false) {
-            initAudio(); // Käivita heli esimesel puutel
+            initAudio(); // Активация аудио при первом же касании
 
             if (magnetMode && isClick) {
-                // 5. Gravity Loops (Lisa magnet)
+                // Режим магнитов: создаем гравитационную точку
                 magnets.push({x: x, y: y});
-                // Lisa mõned osakesed selle ümber
+                // Добавляем частицы, вращающиеся вокруг неё
                 for(let i=0; i<3; i++) {
                     particles.push({
                         angle: Math.random() * Math.PI * 2,
@@ -293,29 +310,27 @@
             const dist = Math.sqrt(dx*dx + dy*dy);
             const speed = dist / dt * 20;
 
+            // Запись движений для лупера
             if (isRecording && !magnetMode) {
                 recordedStrokes.push({ x, y, lx: lastX, ly: lastY, s: speed, c: currentColor, t: currentOscType, time: now - loopStartTime });
             }
 
-            // Joonista ja mängi heli
+            // Основное рисование и звук
             drawPoint(x, y, lastX, lastY, speed, currentColor);
             if(dist > 5) playSynth(x, y, speed, currentColor, currentOscType);
 
-            // 6. Symmetry Mode
+            // Режим симметрии
             if (symmetryMode) {
-                // Horisontaalne
                 drawPoint(width-x, y, width-lastX, lastY, speed, currentColor);
                 if(dist > 5) playSynth(width-x, y, speed, currentColor, currentOscType);
-                // Vertikaalne
                 drawPoint(x, height-y, lastX, height-lastY, speed, currentColor);
-                // Diagonaalne
                 drawPoint(width-x, height-y, width-lastX, height-lastY, speed, currentColor);
             }
 
             lastX = x; lastY = y; lastTime = now;
         }
 
-        // Sündmuste kuulajad hiirele ja puutele
+        // Слушатели событий мыши
         canvas.addEventListener('mousedown', (e) => {
             isDrawing = true;
             lastX = e.clientX; lastY = e.clientY; lastTime = performance.now();
@@ -324,6 +339,7 @@
         canvas.addEventListener('mousemove', (e) => { if (isDrawing) handleInput(e.clientX, e.clientY); });
         canvas.addEventListener('mouseup', () => isDrawing = false);
 
+        // Слушатели событий тачскрина
         canvas.addEventListener('touchstart', (e) => {
             e.preventDefault();
             isDrawing = true;
@@ -336,13 +352,13 @@
         }, {passive: false});
         canvas.addEventListener('touchend', () => isDrawing = false);
 
-        // === RENDER LOOP (Kaja, Loop, Magnetid) ===
+        // === ЦИКЛ РЕНДЕРИНГА (Эффекты, Петли, Магниты) ===
         function animate() {
-            // 3. Echo Trails (Pilt tuhmub aeglaselt)
+            // Эффект шлейфа (предыдущие кадры медленно гаснут)
             ctx.fillStyle = 'rgba(10, 10, 18, 0.05)';
             ctx.fillRect(0, 0, width, height);
 
-            // 5. Gravity Loops (Osakeste liikumine)
+            // Движение частиц вокруг магнитов
             particles.forEach(p => {
                 p.angle += p.speed;
                 const m = magnets[p.magnetIndex];
@@ -357,7 +373,7 @@
                     ctx.shadowColor = p.color;
                     ctx.fill();
 
-                    // Mängi heli iga ringi alguses
+                    // Звук при каждом завершении круга
                     if(p.angle >= Math.PI*2) {
                         p.angle = 0;
                         playSynth(px, py, 50, p.color, p.type);
@@ -365,7 +381,7 @@
                 }
             });
 
-            // Magnetite joonistamine
+            // Отрисовка самих центров магнитов
             magnets.forEach(m => {
                 ctx.beginPath();
                 ctx.arc(m.x, m.y, 10, 0, Math.PI*2);
@@ -377,9 +393,9 @@
         }
         animate();
 
-        // === NUPUD JA LIIDES ===
+        // === ЛОГИКА ИНТЕРФЕЙСА ===
         
-        // Värvide vahetamine (Instrument)
+        // Переключение инструментов (цветов)
         document.querySelectorAll('.color-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
@@ -389,7 +405,7 @@
             });
         });
 
-        // 6. Symmetry lüliti
+        // Кнопка симметрии
         const btnSym = document.getElementById('btn-sym');
         btnSym.addEventListener('click', () => {
             symmetryMode = !symmetryMode;
@@ -397,19 +413,19 @@
             btnSym.classList.toggle('active');
         });
 
-        // 5. Magnet lüliti
+        // Кнопка магнитов
         const btnMagnet = document.getElementById('btn-magnet');
         btnMagnet.addEventListener('click', () => {
             magnetMode = !magnetMode;
             btnMagnet.classList.toggle('active');
         });
 
-        // 8. Record & Loop
+        // Запись и циклическое воспроизведение (Loop)
         const btnRecord = document.getElementById('btn-record');
         let loopInterval = null;
         btnRecord.addEventListener('click', () => {
             if (!isRecording && !loopInterval) {
-                // Alusta salvestust
+                // Начать запись
                 isRecording = true;
                 recordedStrokes = [];
                 loopStartTime = performance.now();
@@ -422,7 +438,7 @@
                     btnRecord.style.borderColor = "#0f0";
                     btnRecord.style.color = "#0f0";
                     
-                    // Alusta taasesitust (Looper)
+                    // Запуск повтора каждые 5 секунд
                     loopInterval = setInterval(() => {
                         recordedStrokes.forEach(stroke => {
                             setTimeout(() => {
@@ -431,9 +447,9 @@
                             }, stroke.time);
                         });
                     }, 5000);
-                }, 5000); // 5 sekundi salvestus
+                }, 5000); // Запись длится 5 секунд
             } else {
-                // Peata loop
+                // Остановить цикл
                 clearInterval(loopInterval);
                 loopInterval = null;
                 btnRecord.textContent = "8. Record (5s)";
@@ -443,13 +459,12 @@
             }
         });
 
-        // 9. Shake to Clear
+        // Очистка экрана (Shake to Clear)
         function triggerClear() {
-            // "Sädemete" efekt (puhastame ekraani välguga)
-            ctx.fillStyle = '#fff';
+            ctx.fillStyle = '#fff'; // Вспышка
             ctx.fillRect(0, 0, width, height);
             
-            // Nullime andmed
+            // Сброс данных
             magnets = [];
             particles = [];
             totalInk = 0;
@@ -458,7 +473,7 @@
 
         document.getElementById('btn-clear').addEventListener('click', triggerClear);
 
-        // Seadme raputamise tuvastus (nutitelefonidele)
+        // Распознавание встряхивания устройства (для мобилок)
         window.addEventListener('devicemotion', (event) => {
             const acc = event.acceleration;
             if (acc && (Math.abs(acc.x) > 15 || Math.abs(acc.y) > 15 || Math.abs(acc.z) > 15)) {
